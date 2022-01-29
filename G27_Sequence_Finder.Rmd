@@ -1,0 +1,60 @@
+---
+title: "G27 Genome Search"
+author: "Ryan Johnson"
+date: "1/28/2022"
+output: html_document
+---
+
+```{r message=FALSE, warning=FALSE}
+# Load packages
+library(biomartr) # Be sure to download dev version 
+library(Biostrings)
+library(tidyverse)
+library(gt)
+```
+
+
+# Retrieve G27 Sequence
+
+```{r message=FALSE, warning=FALSE}
+# Pull in genbank sequence
+g27_genbank <- biomartr::getGenome(db = "genbank",
+                                   organism = "Helicobacter pylori G27",
+                                   path = "G27_genbank/",
+                                   reference = FALSE)
+
+# Read genome
+g27_seq <- biomartr::read_genome(file = g27_genbank, format = "fasta")
+```
+
+# Search for sequence
+
+```{r}
+# Sequnce of interest
+my_seq <- "ATTAAT"
+
+# Count number of times seq is found in genome and plasmid
+nmatches_g27 <- Biostrings::vcountPattern(my_seq, g27_seq)
+nmatches_chromosome <- nmatches_g27[1]
+nmatches_plasmid <- nmatches_g27[2]
+
+# Extract seq match coordinates on genome
+match_index <- vmatchPattern(my_seq, g27_seq)
+start_index <- startIndex(match_index)
+end_index <- endIndex(match_index)
+```
+
+`r my_seq` was found `r nmatches_chromosome` times on the G27 chromosome, and `r nmatches_plasmid` times on the G27 plasmid.
+
+
+```{r}
+# Create table of matches
+seq_match_table <- tibble(Sequence = c(rep("Chr", nmatches_chromosome), 
+                                       rep("Plasmid", nmatches_plasmid)),
+                          Start = unlist(start_index),
+                          End = unlist(end_index))
+
+seq_match_table %>% 
+  gt()
+```
+
