@@ -11,6 +11,10 @@ library(biomartr) # Be sure to download dev version
 library(Biostrings)
 library(tidyverse)
 library(gt)
+library(WriteXLS)
+
+# Set timeout to avoid query issue
+options(timeout = 30000)
 ```
 
 
@@ -23,38 +27,146 @@ g27_genbank <- biomartr::getGenome(db = "genbank",
                                    path = "G27_genbank/",
                                    reference = FALSE)
 
+# Get GFF file
+g27_gff_path <-  getGFF(db = "genbank",
+                          organism = "Helicobacter pylori G27",
+                          reference = FALSE,
+                          release = NULL,
+                          gunzip = FALSE,
+                          path = file.path("G27_genbank/annotation"))
+
 # Read genome
 g27_seq <- biomartr::read_genome(file = g27_genbank, format = "fasta")
+
+# Read gff
+g27_gff <- biomartr::read_gff(file = g27_gff_path)
 ```
 
-# Search for sequence
+# Create annotation table
 
 ```{r}
-# Sequnce of interest
-my_seq <- "ATTAAT"
-
-# Count number of times seq is found in genome and plasmid
-nmatches_g27 <- Biostrings::vcountPattern(my_seq, g27_seq)
-nmatches_chromosome <- nmatches_g27[1]
-nmatches_plasmid <- nmatches_g27[2]
-
-# Extract seq match coordinates on genome
-match_index <- vmatchPattern(my_seq, g27_seq)
-start_index <- startIndex(match_index)
-end_index <- endIndex(match_index)
+# Create function
+hits_in_genome <- function(fasta, GFF, nuc_seq){
+  
+  # Extract seq match coordinates on genome
+  match_index <- vmatchPattern(nuc_seq, fasta)
+  start_index <- startIndex(match_index)[[1]]
+  end_index <- endIndex(match_index)[[1]]
+  
+  # Filter GFF for just CDS regions
+  gff_cds <- GFF %>% 
+    filter(type == "CDS")
+  
+  # Initialize empty results tibble
+  res_tib <- tibble(hit_start = numeric(),
+                    hit_end = numeric(),
+                    CDS_start = numeric(),
+                    CDS_end = numeric(),
+                    Strand = character(),
+                    Attribute = character())
+  
+  # Iterate through start index
+  for(i in start_index){
+    query <- gff_cds %>% 
+      filter(i >= start & i <= end)
+    
+    # If in CDS
+    if(nrow(query) > 0){
+      CDS_hit <- tibble(hit_start = i,
+                        hit_end = end_index[start_index == i],
+                        CDS_start = query$start,
+                        CDS_end = query$end,
+                        Strand = query$strand,
+                        Attribute = query$attribute)
+      
+       res_tib <- res_tib %>% 
+         full_join(CDS_hit, by = c("hit_start", "hit_end", "CDS_start", 
+                                   "CDS_end", "Strand", "Attribute"))
+    }
+    
+    # If between CDS
+    else if(nrow(query) == 0){
+      CDS_miss <- tibble(hit_start = i,
+                         hit_end = end_index[start_index == i],
+                         CDS_start = NULL,
+                         CDS_end = NULL,
+                         Strand = NULL,
+                         Attribute = "IGR")
+      
+      res_tib <- res_tib %>% 
+         full_join(CDS_miss, by = c("hit_start", "hit_end", "Attribute"))
+    }
+  }
+  res_tib
+}
 ```
 
-`r my_seq` was found `r nmatches_chromosome` times on the G27 chromosome, and `r nmatches_plasmid` times on the G27 plasmid.
 
+### Hits in Chromosome
+
+```{r message=FALSE, warning=FALSE}
+# Filter gff file for just chromosome
+g27_gff_chr <- g27_gff %>% 
+  filter(!grepl('HPG27_A', attribute)) %>% 
+  filter(!grepl("CP001174.1", attribute))
+
+chr_hits_f <- hits_in_genome(fasta = g27_seq[1],
+                           GFF = g27_gff_chr, 
+                           nuc_seq = "ATTAAT") %>% 
+  mutate(Chr_or_Plsmd = "Chr") %>% 
+  mutate(query_seq = "ATTAAT")
+
+chr_hits_r <- hits_in_genome(fasta = g27_seq[1],
+                           GFF = g27_gff_chr, 
+                           nuc_seq = "TAATTA") %>% 
+  mutate(Chr_or_Plsmd = "Chr") %>% 
+  mutate(query_seq = "TAATTA")
+```
+
+### Hits in Plasmid
+
+### Hits in Chromosome
+
+```{r message=FALSE, warning=FALSE}
+# Filter gff file for just plasmid
+g27_gff_pls <- g27_gff %>% 
+  filter(grepl('HPG27_A', attribute))
+
+pls_hits_f <- hits_in_genome(fasta = g27_seq[2],
+                           GFF = g27_gff_pls, 
+                           nuc_seq = "ATTAAT") %>% 
+  mutate(Chr_or_Plsmd = "Plsmd") %>% 
+  mutate(query_seq = "ATTAAT")
+
+pls_hits_r <- hits_in_genome(fasta = g27_seq[2],
+                           GFF = g27_gff_pls, 
+                           nuc_seq = "TAATTA") %>% 
+  mutate(Chr_or_Plsmd = "Plsmd") %>% 
+  mutate(query_seq = "TAATTA")
+```
+
+
+### Merge All
 
 ```{r}
-# Create table of matches
-seq_match_table <- tibble(Sequence = c(rep("Chr", nmatches_chromosome), 
-                                       rep("Plasmid", nmatches_plasmid)),
-                          Start = unlist(start_index),
-                          End = unlist(end_index))
+all_hits <- chr_hits_f %>% 
+  full_join(chr_hits_r) %>% 
+  full_join(pls_hits_f) %>% 
+  full_join(pls_hits_r)
 
-seq_match_table %>% 
-  gt()
+write_excel_csv(all_hits, "all_hits_g27.csv")
 ```
+
+
+
+
+
+
+
+
+
+
+
+
+
 
